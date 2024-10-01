@@ -1,0 +1,232 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import './App.css';
+
+const BOARD_SIZE = 19;
+const EMPTY = null;
+const BLACK = 'B';
+const WHITE = 'W';
+const chessImportant = 3;
+
+// 棋盘初始化
+const initializeBoard = () => {
+  return Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(EMPTY));
+};
+
+// 计算连珠得分
+const getCountCombo = (player, list) => {
+  let count = 0;
+  let combo = 0;
+  let comboCount = true;
+
+  for (let item of list) {
+    if (item === player) {
+      count += chessImportant;
+      if (comboCount) combo++;
+    } else if (item === EMPTY) {
+      comboCount = false;
+    } else {
+      break;
+    }
+  }
+  return { count, combo };
+};
+
+// 计算评分函数
+const getScore = (board, x, y, player) => {
+  let maxCount = 0;
+  let sumCombo = 0;
+
+  // 横向计分
+  const horizontalCount1 = getCountCombo(player, board.slice(Math.max(0, x - 5), x).map(row => row[y]));
+  const horizontalCount2 = getCountCombo(player, board.slice(x, Math.min(x + 5, BOARD_SIZE)).map(row => row[y]));
+  maxCount = Math.max(maxCount, horizontalCount1.count + horizontalCount2.count - 2 * chessImportant);
+  sumCombo += horizontalCount1.combo + horizontalCount2.combo - 2;
+
+  // 垂直计分
+  const verticalCount1 = getCountCombo(player, board[x].slice(Math.max(0, y - 5), y));
+  const verticalCount2 = getCountCombo(player, board[x].slice(y, Math.min(y + 5, BOARD_SIZE)));
+  maxCount = Math.max(maxCount, verticalCount1.count + verticalCount2.count - 2 * chessImportant);
+  sumCombo += verticalCount1.combo + verticalCount2.combo - 2;
+
+  // 对角线计分（左上到右下）
+  const diag1 = [];
+  for (let i = -5; i < 5; i++) {
+    if (board[x + i] && board[x + i][y + i]) diag1.push(board[x + i][y + i]);
+  }
+  const diagCount1 = getCountCombo(player, diag1);
+
+  // 对角线计分（左下到右上）
+  const diag2 = [];
+  for (let i = -5; i < 5; i++) {
+    if (board[x + i] && board[x + i][y - i]) diag2.push(board[x + i][y - i]);
+  }
+  const diagCount2 = getCountCombo(player, diag2);
+
+  // 综合计算得分
+  maxCount = Math.max(maxCount, diagCount1.count + diagCount2.count - 2 * chessImportant);
+  sumCombo += diagCount1.combo + diagCount2.combo - 2;
+
+  return maxCount * 20 + sumCombo * 10;
+};
+
+// 获取最优的AI落子位置
+const getBestMove = (board, player, playerColor) => {
+  // 检查是否棋盘为空，如果空，AI 落子在中心点 (9, 9)
+  if (board.every(row => row.every(cell => cell === EMPTY))) {
+    return [9, 9]; // 如果棋盘为空，AI 落子在中心
+  }
+
+  let listScore = [];
+
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    for (let j = 0; j < BOARD_SIZE; j++) {
+      if (board[i][j] === EMPTY) {
+        // AI 模拟落子
+        board[i][j] = player;
+        const aiScore = getScore(board, i, j, player);
+        // 玩家模拟落子
+        board[i][j] = playerColor;
+        const playerScore = getScore(board, i, j, playerColor);
+        listScore.push([aiScore, playerScore, aiScore - playerScore, i, j]);
+        // 恢复棋盘
+        board[i][j] = EMPTY;
+      }
+    }
+  }
+
+  // 根据优先级排序
+  listScore.sort((a, b) => b[0] - a[0]);
+  return [listScore[0][3], listScore[0][4]]; // 返回最优的落子点
+};
+
+const App = () => {
+  const [board, setBoard] = useState(initializeBoard);
+  const [currentPlayer, setCurrentPlayer] = useState(BLACK);
+  const [aiColor, setAiColor] = useState(WHITE);
+  const [playerColor, setPlayerColor] = useState(BLACK);
+  const [winner, setWinner] = useState(null);
+  const [initialized, setInitialized] = useState(false); // 用于确保游戏初始化后 AI 才能下棋
+  const [isAiTurn, setIsAiTurn] = useState(false); // 标识是否是AI的回合
+
+  // 随机分配玩家和AI的棋色，黑棋先手
+  useEffect(() => {
+    const isPlayerBlack = Math.random() > 0.5;
+
+    if (isPlayerBlack) {
+      setPlayerColor(BLACK);
+      setAiColor(WHITE);
+      setCurrentPlayer(BLACK); // 玩家是黑棋先手
+    } else {
+      setPlayerColor(WHITE);
+      setAiColor(BLACK);
+      setCurrentPlayer(BLACK); // 黑棋先手
+      setIsAiTurn(true); // 如果玩家是白棋，AI先手
+    }
+
+    setInitialized(true); // 游戏初始化完成
+  }, []);
+
+  // 点击棋盘落子（玩家和AI共用）
+  const handleBoardClick = useCallback((x, y) => {
+    if (board[x][y] || winner || !initialized || isAiTurn) return; // 确保空位且没有胜利且是玩家的回合
+
+    const newBoard = [...board];
+    const current = currentPlayer; // 保存当前的玩家，避免在回合切换时造成混淆
+    newBoard[x][y] = current;
+    setBoard(newBoard);
+
+    // 检查是否获胜
+    if (checkWin(x, y, current)) {
+      setWinner(current);
+      alert(current === playerColor ? '玩家获胜！' : 'AI获胜！');
+      return;
+    }
+
+    // 切换到AI回合
+    const nextPlayer = currentPlayer === BLACK ? WHITE : BLACK;
+    setCurrentPlayer(nextPlayer);
+    setIsAiTurn(true);
+  }, [board, currentPlayer, winner, playerColor, initialized, isAiTurn]);
+
+  // AI 落子逻辑
+  useEffect(() => {
+    if (isAiTurn && !winner) {
+      setTimeout(() => {
+        const [bestX, bestY] = getBestMove(board, aiColor, playerColor);
+        handleBoardClickForAi(bestX, bestY);  // AI 落子
+      }, 500); // 模拟AI思考时间
+    }
+  }, [isAiTurn, aiColor, board, playerColor, winner]);
+
+  // AI专用落子函数
+  const handleBoardClickForAi = (x, y) => {
+    if (board[x][y] || winner) return; // 确保空位且没有胜利
+
+    const newBoard = [...board];
+    newBoard[x][y] = currentPlayer;
+    setBoard(newBoard);
+
+    // 检查是否获胜
+    if (checkWin(x, y, currentPlayer)) {
+      setWinner(currentPlayer);
+      alert('AI获胜！');
+      return;
+    }
+
+    // 切换到玩家回合
+    const nextPlayer = currentPlayer === BLACK ? WHITE : BLACK;
+    setCurrentPlayer(nextPlayer);
+    setIsAiTurn(false); // 轮到玩家
+  };
+
+  // 检查是否胜利
+  const checkWin = (x, y, player) => {
+    return (
+      checkLine(x, y, 1, 0, player) || // 横向
+      checkLine(x, y, 0, 1, player) || // 纵向
+      checkLine(x, y, 1, 1, player) || // 对角线1
+      checkLine(x, y, 1, -1, player)   // 对角线2
+    );
+  };
+
+  // 检查某条线是否有5个连珠
+  const checkLine = (x, y, dx, dy, player) => {
+    let count = 1;
+    for (let i = 1; i < 5; i++) {
+      const newX = x + i * dx;
+      const newY = y + i * dy;
+      if (board[newX] && board[newX][newY] === player) count++;
+      else break;
+    }
+    for (let i = 1; i < 5; i++) {
+      const newX = x - i * dx;
+      const newY = y - i * dy;
+      if (board[newX] && board[newX][newY] === player) count++;
+      else break;
+    }
+    return count >= 5;
+  };
+
+  // 渲染棋盘
+  return (
+    <div className="game-board">
+      <h1>五子棋</h1>
+      {winner && <h2>{winner === playerColor ? '玩家获胜！' : 'AI获胜！'}</h2>}
+      <div className="board">
+        {board.map((row, rowIndex) => (
+          <div className="row" key={rowIndex}>
+            {row.map((cell, cellIndex) => (
+              <div
+                key={cellIndex}
+                className={`cell ${cell === BLACK ? 'black' : cell === WHITE ? 'white' : ''}`}
+                onClick={() => handleBoardClick(rowIndex, cellIndex)}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default App;

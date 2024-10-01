@@ -1,0 +1,210 @@
+import React, { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
+import GomokuGameABI from './GomokuGameABI.json';  // 引入合约ABI
+import './App.css'; // 引入CSS文件
+const CONTRACT_ADDRESS = "0x55F2b31996273A60F4433Eb02E76390ce56D2Ec9";  // 合约地址
+const SCROLL_CHAIN_ID = '534352'; // Scroll链ID
+
+const BOARD_SIZE = 19;
+const LINE_SPAN = 40;
+const BLACK = 'B';
+const WHITE = 'W';
+const EMPTY = null;
+
+const App = () => {
+  const [board, setBoard] = useState(Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(EMPTY)));
+  const [currentPlayer, setCurrentPlayer] = useState(BLACK);
+  const [winner, setWinner] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [provider, setProvider] = useState(null);
+  const [signer, setSigner] = useState(null);
+  const [contract, setContract] = useState(null);
+
+  // 初始化钱包连接
+  const connectWallet = async () => {
+    if (window.ethereum) {
+      try {
+        await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        const signer = provider.getSigner();
+        const account = await signer.getAddress();
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, GomokuGameABI, signer);
+
+        const network = await provider.getNetwork();
+        if (network.chainId !== parseInt(SCROLL_CHAIN_ID)) {
+          await switchToScrollChain();
+        }
+
+        setProvider(provider);
+        setSigner(signer);
+        setContract(contract);
+        setAccount(account);
+        alert(`钱包连接成功，地址：${account}`);
+      } catch (error) {
+        console.error('连接钱包失败:', error);
+      }
+    } else {
+      alert('请安装MetaMask!');
+    }
+  };
+
+  // 切换到 Scroll 链
+  const switchToScrollChain = async () => {
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: ethers.utils.hexlify(parseInt(SCROLL_CHAIN_ID)) }],
+      });
+    } catch (error) {
+      console.error('切换到Scroll链失败:', error);
+    }
+  };
+
+  // 点击棋盘进行落子
+  const handleBoardClick = (x, y) => {
+    if (board[x][y] || winner) return; // 如果棋子已经存在或者已经决出胜负，返回
+
+    const newBoard = [...board];
+    newBoard[x][y] = currentPlayer;
+    setBoard(newBoard);
+
+    // 检查是否获胜
+    if (checkWin(x, y, currentPlayer)) {
+      setWinner(currentPlayer);
+      alert(`${currentPlayer === BLACK ? '玩家' : 'AI'}获胜！`);
+      if (currentPlayer === BLACK) {
+        mintNFT();  // 玩家获胜时发放NFT
+      }
+      return;
+    }
+
+    setCurrentPlayer(currentPlayer === BLACK ? WHITE : BLACK);
+    if (currentPlayer === WHITE) {
+      setTimeout(() => computerMove(), 500); // AI移动
+    }
+  };
+
+  // AI 移动
+  const computerMove = () => {
+    const [bestX, bestY] = getBestMove(board);
+    handleBoardClick(bestX, bestY);  // 让AI调用落子函数
+  };
+
+  // 判断是否获胜
+  const checkWin = (x, y, player) => {
+    return (
+      checkDirection(x, y, player, 1, 0) || // 水平方向
+      checkDirection(x, y, player, 0, 1) || // 垂直方向
+      checkDirection(x, y, player, 1, 1) || // 斜向（左上到右下）
+      checkDirection(x, y, player, 1, -1)   // 斜向（右上到左下）
+    );
+  };
+
+  const checkDirection = (x, y, player, dx, dy) => {
+    let count = 1;
+    for (let i = 1; i < 5; i++) {
+      if (board[x + i * dx]?.[y + i * dy] === player) count++;
+      else break;
+    }
+    for (let i = 1; i < 5; i++) {
+      if (board[x - i * dx]?.[y - i * dy] === player) count++;
+      else break;
+    }
+    return count >= 5;
+  };
+
+  // 发放 NFT
+  const mintNFT = async () => {
+    if (contract && account) {
+      try {
+        const tx = await contract._mintNFT(account);
+        await tx.wait();
+        alert('NFT已发放！');
+      } catch (error) {
+        console.error('发放NFT失败:', error);
+      }
+    }
+  };
+
+  return (
+    <div className="App">
+      <h1>Gomoku 五子棋</h1>
+      <button onClick={connectWallet}>
+        {account ? `已连接: ${account.slice(0, 6)}...${account.slice(-4)}` : '连接钱包'}
+      </button>
+      <canvas
+        id="gomokuCanvas"
+        width={BOARD_SIZE * LINE_SPAN}
+        height={BOARD_SIZE * LINE_SPAN}
+        onClick={(e) => {
+          const rect = e.target.getBoundingClientRect();
+          const x = Math.floor((e.clientX - rect.left) / LINE_SPAN);
+          const y = Math.floor((e.clientY - rect.top) / LINE_SPAN);
+          handleBoardClick(x, y);
+        }}
+      />
+    </div>
+  );
+};
+
+// AI 逻辑
+function getBestMove(arr) {
+  // 检查每个点的得分，调用 computer.py 中转换过来的逻辑
+  let list_score = [];
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    for (let j = 0; j < BOARD_SIZE; j++) {
+      if (arr[i][j] === EMPTY) {
+        arr[i][j] = WHITE;
+        let scorenext = getScore(arr, i, j, WHITE);  // AI的得分
+        arr[i][j] = BLACK;
+        let scoreplay1 = getScore(arr, i, j, BLACK); // 玩家得分
+        list_score.push([scorenext, scoreplay1, scorenext - scoreplay1, i, j]);
+        arr[i][j] = EMPTY;
+      }
+    }
+  }
+
+  list_score.sort((a, b) => b[0] - a[0]); // 按得分排序
+  return [list_score[0][3], list_score[0][4]]; // 返回最佳位置
+}
+
+function getScore(arr, x, y, player) {
+  // 检查每个方向的得分，类似 computer.py 逻辑转换
+  let maxcount = 0;
+  let sumcombo = 0;
+  let directions = [
+    { dx: 1, dy: 0 }, // 水平
+    { dx: 0, dy: 1 }, // 垂直
+    { dx: 1, dy: 1 }, // 左上到右下
+    { dx: 1, dy: -1 }, // 右上到左下
+  ];
+
+  directions.forEach((direction) => {
+    let [count1, combo1] = getCountCombo(player, arr, x, y, direction.dx, direction.dy);
+    let [count2, combo2] = getCountCombo(player, arr, x, y, -direction.dx, -direction.dy);
+    maxcount = Math.max(maxcount, count1 + count2);
+    sumcombo += combo1 + combo2;
+  });
+
+  return maxcount * 20 + sumcombo * 10;
+}
+
+function getCountCombo(player, arr, x, y, dx, dy) {
+  let count = 0;
+  let combo = 0;
+  for (let i = 1; i < 5; i++) {
+    let newX = x + i * dx;
+    let newY = y + i * dy;
+    if (arr[newX]?.[newY] === player) {
+      count++;
+      combo++;
+    } else if (arr[newX]?.[newY] === EMPTY) {
+      break;
+    } else {
+      break;
+    }
+  }
+  return [count, combo];
+}
+
+export default App;
